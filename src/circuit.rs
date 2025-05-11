@@ -148,7 +148,7 @@ impl<F: PrimeField<Repr = [u8; 32]> + PrimeFieldBits> SigIter<F> {
         let mut msg: [u8; 32] = [0; 32];
         rand::thread_rng().fill_bytes(&mut msg);
 
-        let ((R, s), P) = sign(msg);
+        let ((R, s), P) = sign(msg, None);
 
         let veri_sig = verify(msg, P.clone(), R.clone(), s.clone());
         assert!(veri_sig);
@@ -160,6 +160,16 @@ impl<F: PrimeField<Repr = [u8; 32]> + PrimeFieldBits> SigIter<F> {
             _phantom: PhantomData,
         }
     }
+    pub fn from_message(msg: [u8; 32], secret_opt: Option<[u8; 32]>) -> Self {
+        let ((R, s), P) = sign(msg, secret_opt);
+        assert!(verify(msg, P.clone(), R.clone(), s.clone()));
+        Self {
+            pubkey: P,
+            msg,
+            sign: (R, s),
+            _phantom: PhantomData,
+        }
+    }    
 }
 
 impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {

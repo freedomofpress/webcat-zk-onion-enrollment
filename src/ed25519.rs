@@ -7,11 +7,17 @@ use rand::RngCore;
 use sha2::{Digest, Sha512};
 use std::ops::Rem;
 
-pub fn keygen() -> ((BigUint, [u8; 32]), AffinePoint) {
+pub fn keygen(secret_opt: Option<[u8; 32]>) -> ((BigUint, [u8; 32]), AffinePoint) {
     let q = Ed25519Curve::order();
-
-    let mut secret: [u8; 32] = [0; 32];
-    rand::thread_rng().fill_bytes(&mut secret);
+    
+    let secret: [u8; 32] = match secret_opt {
+        Some(bytes) => bytes,
+        None => {
+            let mut s = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut s);
+            s
+        }
+    };
 
     let hash = Sha512::default().chain_update(secret).finalize();
 
@@ -28,12 +34,12 @@ pub fn keygen() -> ((BigUint, [u8; 32]), AffinePoint) {
     ((private_key, hash_prefix), P)
 }
 
-pub fn sign(msg: [u8; 32]) -> ((AffinePoint, BigUint), AffinePoint) {
+pub fn sign(msg: [u8; 32], secret_opt: Option<[u8; 32]>) -> ((AffinePoint, BigUint), AffinePoint) {
     let q = Ed25519Curve::order();
     let G = Ed25519Curve::basepoint();
 
     // Generate private_key, hash_prefix and public key P
-    let ((private_key, hash_prefix), P) = keygen();
+    let ((private_key, hash_prefix), P) = keygen(secret_opt);
 
     // Compute r = hash(hash_prefix || msg) mod q
     let mut input = Vec::new();
@@ -44,6 +50,7 @@ pub fn sign(msg: [u8; 32]) -> ((AffinePoint, BigUint), AffinePoint) {
 
     // Compute R = r * G
     let R = Ed25519Curve::scalar_multiplication(&G, &r);
+    let R_bytes = compress(R.clone()); // 32 bytes
 
     // Compute h = hash(R || P || msg) mod q
     input = Vec::new();
@@ -58,6 +65,22 @@ pub fn sign(msg: [u8; 32]) -> ((AffinePoint, BigUint), AffinePoint) {
 
     // Compute s = (r + h * private_key) mod q
     let s = &(r + &(h * private_key).rem(q.clone())).rem(q.clone());
+    let mut s_bytes = s.to_bytes_le(); // LE for Ed25519
+    s_bytes.resize(32, 0); // Pad to 32 bytes if needed
+
+    let mut signature = [0u8; 64];
+    signature[..32].copy_from_slice(&R_bytes);
+    signature[32..].copy_from_slice(&s_bytes);
+
+    // === Print ===
+    if let Some(seed) = secret_opt {
+        println!("Secret key:             {}", hex::encode(seed));
+    } else {
+        println!("Secret key:             <random>");
+    }
+    println!("Public key:             {}", hex::encode(compress(P.clone())));
+    println!("Message:                {}", hex::encode(msg));
+    println!("Signature:              {}", hex::encode(signature));
 
     ((R, s.clone()), P)
 }
@@ -116,7 +139,7 @@ mod test {
             let mut msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut msg);
 
-            let ((R, s), P) = sign(msg);
+            let ((R, s), P) = sign(msg, None);
 
             let veri_sig = verify(msg, P, R, s);
             assert!(veri_sig)
@@ -129,7 +152,7 @@ mod test {
             let mut msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut msg);
 
-            let ((R, s), P) = sign(msg);
+            let ((R, s), P) = sign(msg, None);
 
             let mut wrong_msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut wrong_msg);
@@ -149,7 +172,7 @@ mod test {
             let mut msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut msg);
 
-            let ((R, s), _) = sign(msg);
+            let ((R, s), _) = sign(msg, None);
 
             let mut wrong_key_scalar_bytes: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut wrong_key_scalar_bytes);
@@ -173,7 +196,7 @@ mod test {
             let mut msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut msg);
 
-            let ((_, s), P) = sign(msg);
+            let ((_, s), P) = sign(msg, None);
 
             let mut wrong_r_scalar_bytes: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut wrong_r_scalar_bytes);
@@ -195,7 +218,7 @@ mod test {
             let mut msg: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut msg);
 
-            let ((R, _), P) = sign(msg);
+            let ((R, _), P) = sign(msg, None);
 
             let mut wrong_s_bytes: [u8; 32] = [0; 32];
             rand::thread_rng().fill_bytes(&mut wrong_s_bytes);
