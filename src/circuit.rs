@@ -173,11 +173,12 @@ impl<F: PrimeField<Repr = [u8; 32]> + PrimeFieldBits> SigIter<F> {
 }
 
 impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
+    /// We carry both the 32-byte message (256 bits) and the 64-byte pubkey hash (512 bits)
+    /// totaling 768 bits, packed into ceil(768 / F::CAPACITY) scalars.
     fn arity(&self) -> usize {
-        // 32 bytes = 256 bits → ceil(256 / F::CAPACITY) chunks
-        let bits = 32 * 8;
+        let total_bits = 32 * 8  /* message */ + 64 * 8  /* pubkey hash */;
         let cap = F::CAPACITY as usize;
-        (bits + cap - 1) / cap
+        (total_bits + cap - 1) / cap  // e.g. 4
     }
 
     fn synthesize<CS: ConstraintSystem<F>>(
@@ -185,7 +186,7 @@ impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
         cs: &mut CS,
         _z: &[AllocatedNum<F>],
     ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
-        // Verify the Ed25519 signature
+        // 1) Verify the Ed25519 signature
         let g = Ed25519Curve::basepoint();
         verify_circuit(
             &mut cs.namespace(|| "verify signature"),
@@ -195,9 +196,9 @@ impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
             self.sign.clone(),
         )?;
 
-        let raw_bits = bytes_to_bits(&self.msg);
-        let mut msg_bits = Vec::with_capacity(raw_bits.len());
-        for (i, &b) in raw_bits.iter().enumerate() {
+        // 2) Allocate message bits
+        let mut msg_bits = Vec::with_capacity(32 * 8);
+        for (i, &b) in bytes_to_bits(&self.msg).iter().enumerate() {
             let bit = AllocatedBit::alloc(
                 &mut cs.namespace(|| format!("msg bit {}", i)),
                 Some(b),
@@ -205,39 +206,40 @@ impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
             msg_bits.push(Boolean::from(bit));
         }
 
-        // Expose the message as compact public inputs:
-        //bellpepper::gadgets::multipack::pack_into_inputs::<F, _>(
-        //    cs.namespace(|| "pack message"),
-        //    &msg_bits,
-        //)?;
-
-        //Ok(vec![])
-
-        // 2) Turn the 32-byte message into Boolean bits
-        let raw_bits = bytes_to_bits(&self.msg);
-        let mut msg_bits = Vec::with_capacity(raw_bits.len());
-        for (i, &b) in raw_bits.iter().enumerate() {
-            let bit = AllocatedBit::alloc(
-                &mut cs.namespace(|| format!("msg bit {}", i)),
-                Some(b),
-            )?;
-            msg_bits.push(Boolean::from(bit));
+        // 3) Allocate compressed pubkey bits
+        let compressed_pk = compress(self.pubkey.clone());
+        let mut pk_bits = Vec::with_capacity(compressed_pk.len() * 8);
+        for (i, &byte) in compressed_pk.iter().enumerate() {
+            for j in (0..8).rev() {
+                let b = ((byte >> j) & 1) == 1;
+                let bit = AllocatedBit::alloc(
+                    &mut cs.namespace(|| format!("pk bit {}.{}", i, j)),
+                    Some(b),
+                )?;
+                pk_bits.push(Boolean::from(bit));
+            }
         }
 
-        // 3) Pack those bits into *recursive-state* scalars
+        // 4) Hash pk_bits via SHA-512 gadget
+        let hash_pk = sha512(&mut cs.namespace(|| "sha512(pubkey)"), &pk_bits)?;
+
+        // 5) Build one combined Boolean vector: msg_bits || hash_pk
+        let mut all_bits = Vec::with_capacity(msg_bits.len() + hash_pk.len());
+        all_bits.extend(msg_bits);
+        all_bits.extend(hash_pk);
+
+        // 6) Pack into state scalars
         let mut state = Vec::new();
         let cap = F::CAPACITY as usize;
-        for (chunk_i, chunk) in msg_bits.chunks(cap).enumerate() {
-            let scalar = bellpepper::gadgets::multipack::pack_bits(
-                &mut cs.namespace(|| format!("pack msg chunk {}", chunk_i)),
-                chunk,
+        for (chunk_i, chunk_bits) in all_bits.chunks(cap).enumerate() {
+            let num = bellpepper::gadgets::multipack::pack_bits(
+                &mut cs.namespace(|| format!("pack chunk {}", chunk_i)),
+                chunk_bits,
             )?;
-            state.push(scalar);
+            state.push(num);
         }
 
-        // 4) Return them as the next‐state vector:
         Ok(state)
-
     }
 }
 

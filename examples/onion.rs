@@ -2,6 +2,8 @@ use clap::{Arg, Command};
 use flate2::{write::ZlibEncoder, Compression};
 use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking};
 use ff::PrimeField;
+use nova_eddsa::ed25519::{keygen, compress};
+use sha2::{Sha512, Digest};
 use nova_eddsa::circuit::SigIter;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
@@ -55,6 +57,10 @@ fn main() {
     let mut sk = [0u8; 32];
     sk.copy_from_slice(&sk_bytes);
 
+    let ((_, _hash_prefix), pubkey_derived) = keygen(Some(sk));
+    let compressed_pk = compress(pubkey_derived.clone());
+    println!("Derived public key: {:02x?}", compressed_pk);
+
     type C1 = SigIter<<E1 as Engine>::Scalar>;
     type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
 
@@ -83,9 +89,23 @@ fn main() {
         pp.num_variables().0
     );
 
-    let raw_bits: Vec<bool> = bytes_to_bits(&msg);
+    // 3) Build one big boolean vector: [ msg_bits || sha512(pubkey)_bits ]
+    let mut all_bits = Vec::new();
+
+    // – message bits
+    all_bits.extend(bytes_to_bits(&msg));
+
+    // – compressed pubkey bits, via SHA-512
+    let ((_, _), pubkey_derived) = keygen(Some(sk));
+    let compressed_pk = compress(pubkey_derived.clone());
+    let mut hasher = Sha512::new();
+    hasher.update(&compressed_pk);
+    let pk_hash_bytes = hasher.finalize();
+    all_bits.extend(bytes_to_bits(&pk_hash_bytes));
+
+    // 4) Now multipack that single 768-bit stream into Fq scalars:
     type Scalar1 = <E1 as Engine>::Scalar;
-    let z0_primary: Vec<Scalar1> = compute_multipacking::<Scalar1>(&raw_bits)
+    let z0_primary: Vec<Scalar1> = compute_multipacking::<Scalar1>(&all_bits)
         .into_iter()
         .map(|e| Scalar1::from_repr_vartime(e.to_repr()).unwrap())
         .collect();
