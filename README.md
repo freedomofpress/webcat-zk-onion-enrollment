@@ -12,13 +12,12 @@ Forked from [nova-eddsa](https://github.com/zk-bankai/nova-eddsa).
 ## Solution
 Onion Service owners sign an enrollment statement and build a Nova ZK proof; only `hash(pubkey)`, the signed message and the SNARK proof are sent to the enrollment service. The signed message contains the trust material for WEBCAT: authorized signers, associated transparency log, etc. They do so using the Ed25519 private key associated with their `.onion` domain.
 
-When a user visits the onion site, a WebCAT plugin:
+When a user visits the onion site, the WEBCAT addon:
 
-1. Fetches the service’s public key  
+1. Fetches the service's public key, which is embedded in the `.onion` domain
 2. Computes `hash(pubkey)`  
-3. Looks up the associated trust material in the list 
-
-_No central list of plaintext .onion domains → WEBCAT operators or auditors cannot enumerate enrolled services._
+3. Looks up the associated trust material in the list
+4. Continues with WEBCAT validation
 
 ## Workflow
 
@@ -38,8 +37,6 @@ Send `msg`, `hash(pubkey)`, and the content of `proof.bin` to the WEBCAT enrollm
 Client or CLI:
 
     onion-cmd verify --msg <32-byte-hex> --pk-hash <64-byte-hex> --proof proof.bin
-
-
 
 ## Limitations & Spam
 - **No liveness checks**: fake or dead-site enrollments can flood the registry  
