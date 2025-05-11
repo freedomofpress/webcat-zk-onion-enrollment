@@ -72,16 +72,6 @@ pub fn sign(msg: [u8; 32], secret_opt: Option<[u8; 32]>) -> ((AffinePoint, BigUi
     signature[..32].copy_from_slice(&R_bytes);
     signature[32..].copy_from_slice(&s_bytes);
 
-    // === Print ===
-    if let Some(seed) = secret_opt {
-        println!("Secret key:             {}", hex::encode(seed));
-    } else {
-        println!("Secret key:             <random>");
-    }
-    println!("Public key:             {}", hex::encode(compress(P.clone())));
-    println!("Message:                {}", hex::encode(msg));
-    println!("Signature:              {}", hex::encode(signature));
-
     ((R, s.clone()), P)
 }
 
