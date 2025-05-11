@@ -174,7 +174,10 @@ impl<F: PrimeField<Repr = [u8; 32]> + PrimeFieldBits> SigIter<F> {
 
 impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
     fn arity(&self) -> usize {
-        0
+        // 32 bytes = 256 bits → ceil(256 / F::CAPACITY) chunks
+        let bits = 32 * 8;
+        let cap = F::CAPACITY as usize;
+        (bits + cap - 1) / cap
     }
 
     fn synthesize<CS: ConstraintSystem<F>>(
@@ -182,8 +185,8 @@ impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
         cs: &mut CS,
         _z: &[AllocatedNum<F>],
     ) -> Result<Vec<AllocatedNum<F>>, SynthesisError> {
+        // Verify the Ed25519 signature
         let g = Ed25519Curve::basepoint();
-
         verify_circuit(
             &mut cs.namespace(|| "verify signature"),
             g,
@@ -192,9 +195,52 @@ impl<F: PrimeField + PrimeFieldBits> StepCircuit<F> for SigIter<F> {
             self.sign.clone(),
         )?;
 
-        Ok(vec![])
+        let raw_bits = bytes_to_bits(&self.msg);
+        let mut msg_bits = Vec::with_capacity(raw_bits.len());
+        for (i, &b) in raw_bits.iter().enumerate() {
+            let bit = AllocatedBit::alloc(
+                &mut cs.namespace(|| format!("msg bit {}", i)),
+                Some(b),
+            )?;
+            msg_bits.push(Boolean::from(bit));
+        }
+
+        // Expose the message as compact public inputs:
+        //bellpepper::gadgets::multipack::pack_into_inputs::<F, _>(
+        //    cs.namespace(|| "pack message"),
+        //    &msg_bits,
+        //)?;
+
+        //Ok(vec![])
+
+        // 2) Turn the 32-byte message into Boolean bits
+        let raw_bits = bytes_to_bits(&self.msg);
+        let mut msg_bits = Vec::with_capacity(raw_bits.len());
+        for (i, &b) in raw_bits.iter().enumerate() {
+            let bit = AllocatedBit::alloc(
+                &mut cs.namespace(|| format!("msg bit {}", i)),
+                Some(b),
+            )?;
+            msg_bits.push(Boolean::from(bit));
+        }
+
+        // 3) Pack those bits into *recursive-state* scalars
+        let mut state = Vec::new();
+        let cap = F::CAPACITY as usize;
+        for (chunk_i, chunk) in msg_bits.chunks(cap).enumerate() {
+            let scalar = bellpepper::gadgets::multipack::pack_bits(
+                &mut cs.namespace(|| format!("pack msg chunk {}", chunk_i)),
+                chunk,
+            )?;
+            state.push(scalar);
+        }
+
+        // 4) Return them as the next‐state vector:
+        Ok(state)
+
     }
 }
+
 
 #[cfg(test)]
 mod test {

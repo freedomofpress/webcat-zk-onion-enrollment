@@ -1,5 +1,7 @@
 use clap::{Arg, Command};
 use flate2::{write::ZlibEncoder, Compression};
+use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking};
+use ff::PrimeField;
 use nova_eddsa::circuit::SigIter;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
@@ -81,7 +83,13 @@ fn main() {
         pp.num_variables().0
     );
 
-    let z0_primary = [];
+    let raw_bits: Vec<bool> = bytes_to_bits(&msg);
+    type Scalar1 = <E1 as Engine>::Scalar;
+    let z0_primary: Vec<Scalar1> = compute_multipacking::<Scalar1>(&raw_bits)
+        .into_iter()
+        .map(|e| Scalar1::from_repr_vartime(e.to_repr()).unwrap())
+        .collect();
+
     let z0_secondary = [<E2 as Engine>::Scalar::zero()];
 
     // Prove
@@ -97,7 +105,7 @@ fn main() {
     // Verify Recursive
     println!("Verifying a RecursiveSNARK...");
     let start = Instant::now();
-    let res = recursive_snark.verify(&pp, 1, &z0_primary, &z0_secondary);
+    let res = recursive_snark.verify(&pp, 1, &z0_primary[..], &z0_secondary);
     println!(
         "RecursiveSNARK::verify: {:?}, took {:?}",
         res.is_ok(),
@@ -131,7 +139,7 @@ fn main() {
     // Verify compressed
     println!("Verifying a CompressedSNARK...");
     let start = Instant::now();
-    let res = compressed_snark.verify(&vk, 1, &z0_primary, &z0_secondary);
+    let res = compressed_snark.verify(&vk, 1, &z0_primary[..], &z0_secondary);
     let verification_time = start.elapsed();
     println!(
         "CompressedSNARK::verify: {:?}, took {:?}",
